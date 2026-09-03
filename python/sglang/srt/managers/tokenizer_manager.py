@@ -868,8 +868,6 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
             unsupported_reason = "watermark does not support multimodal input"
         elif self.disaggregation_mode != DisaggregationMode.NULL:
             unsupported_reason = "watermark does not support disaggregated execution"
-        elif get_parallel().tp_size != 1:
-            unsupported_reason = "watermark currently requires tensor parallel size 1"
         elif get_spec().speculative_algorithm not in (None, "EAGLE"):
             unsupported_reason = "watermark speculative decoding support requires EAGLE"
         elif get_exec().dllm.dllm_algorithm is not None:

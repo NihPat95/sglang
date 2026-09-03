@@ -98,6 +98,20 @@ class TestTextSealSampler(CustomTestCase):
         torch.testing.assert_close(selected, torch.tensor([1, 2]))
         sampler._sample_from_probs_ordinary.assert_not_called()
 
+    def test_watermarked_tokens_are_synchronized_across_tp(self):
+        sampler = SimpleNamespace(tp_sync_group="tp-group")
+        token_ids = torch.tensor([3, 4])
+        sampling_info = SimpleNamespace(grammars=None, watermark=_watermark())
+
+        with patch("sglang.srt.layers.sampler.dist.all_reduce") as all_reduce:
+            Sampler._sync_token_ids_across_tp(sampler, token_ids, sampling_info)
+
+        all_reduce.assert_called_once_with(
+            token_ids,
+            op=torch.distributed.ReduceOp.MIN,
+            group="tp-group",
+        )
+
     def test_effective_support_matches_top_k_top_p_min_p(self):
         probs = torch.tensor([[0.4, 0.3, 0.2, 0.1], [0.5, 0.2, 0.2, 0.1]])
         effective = build_effective_probs(

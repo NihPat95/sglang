@@ -1,11 +1,14 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import torch
 
 from sglang.srt.sampling.watermark import WatermarkBatchInfo
-from sglang.srt.speculative.eagle_utils import _apply_verifier_only_watermark
+from sglang.srt.speculative.eagle_utils import (
+    _apply_verifier_only_watermark,
+    _sync_watermarked_predict_across_tp,
+)
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -71,6 +74,35 @@ class TestEagleWatermark(CustomTestCase):
             selector.call_args.args[4].contexts.tolist(), [[11, 12], [8, 21]]
         )
         self.assertEqual(selector.call_args.args[5].tolist(), [102, 105])
+
+    def test_post_watermark_predict_is_broadcast_across_tp(self):
+        for dp_attention in (False, True):
+            with self.subTest(dp_attention=dp_attention):
+                tp_group = MagicMock(world_size=2)
+                predict = torch.tensor([11, 12, 3, -1, 21, 2, -1, -1])
+                sampling_info = SimpleNamespace(watermark=object())
+                parallel = SimpleNamespace(attn_tp_group=tp_group)
+
+                with (
+                    patch(
+                        "sglang.srt.layers.dp_attention.is_dp_attention_enabled",
+                        return_value=dp_attention,
+                    ),
+                    patch(
+                        "sglang.srt.distributed.get_tp_group",
+                        return_value=tp_group,
+                    ),
+                    patch(
+                        "sglang.srt.speculative.eagle_utils.get_parallel",
+                        return_value=parallel,
+                    ),
+                ):
+                    result = _sync_watermarked_predict_across_tp(
+                        predict, sampling_info
+                    )
+
+                self.assertIs(result, predict)
+                tp_group.broadcast.assert_called_once_with(predict, src=0)
 
 
 if __name__ == "__main__":

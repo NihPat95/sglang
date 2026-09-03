@@ -738,6 +738,25 @@ def _apply_verifier_only_watermark(
     return predict.index_copy(0, bonus_indices, bonus_tokens)
 
 
+def _sync_watermarked_predict_across_tp(
+    predict: torch.Tensor, sampling_info: SamplingBatchInfo
+) -> torch.Tensor:
+    if sampling_info.watermark is None:
+        return predict
+
+    from sglang.srt.distributed import get_tp_group
+    from sglang.srt.layers.dp_attention import is_dp_attention_enabled
+
+    tp_group = (
+        get_parallel().attn_tp_group
+        if is_dp_attention_enabled()
+        else get_tp_group()
+    )
+    if tp_group.world_size > 1:
+        tp_group.broadcast(predict, src=0)
+    return predict
+
+
 def eagle_sample(
     verify_input: EagleVerifyInput,
     batch: ScheduleBatch,
@@ -993,6 +1012,7 @@ def eagle_sample(
         num_correct_drafts,
         accept_index,
     )
+    predict = _sync_watermarked_predict_across_tp(predict, batch.sampling_info)
 
     # `num_correct_drafts` stays drafts-only inside this function; the returned
     # tensor includes the trailing/bonus token via out-of-place +1 so the

@@ -77,6 +77,7 @@ class TestTextSealEndpoints(CustomTestCase):
             self.assertTrue(response.json()["choices"])
 
     def test_chat_and_completions_streaming_and_non_streaming(self):
+        """Watermarked requests must work with default CUDA graph execution."""
         cases = [
             (
                 "/v1/chat/completions",
