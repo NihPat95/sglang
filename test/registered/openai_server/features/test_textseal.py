@@ -45,7 +45,6 @@ class TestTextSealEndpoints(CustomTestCase):
             DEFAULT_URL_FOR_TEST,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[
-                "--disable-cuda-graph",
                 "--attention-backend",
                 "triton",
                 "--sampling-backend",

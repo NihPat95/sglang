@@ -882,10 +882,6 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
             unsupported_reason = "watermark does not support single-token support"
         elif get_exec().kernel.sampling_backend not in ("flashinfer", "pytorch"):
             unsupported_reason = "watermark requires the flashinfer or pytorch sampler"
-        elif not get_exec().graph.disable_cuda_graph:
-            unsupported_reason = (
-                "watermark currently requires CUDA graphs to be disabled"
-            )
 
         if unsupported_reason is not None:
             raise WatermarkRequestError(
