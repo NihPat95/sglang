@@ -22,6 +22,18 @@ class WatermarkBatchInfo(msgspec.Struct, frozen=True, kw_only=True):
     contexts: torch.Tensor
     nonces: torch.Tensor
 
+    def with_contexts(self, contexts: torch.Tensor) -> "WatermarkBatchInfo":
+        return WatermarkBatchInfo(
+            enabled=self.enabled,
+            all_enabled=self.all_enabled,
+            key_a=self.key_a,
+            key_b=self.key_b,
+            mixing_probabilities=self.mixing_probabilities,
+            ngrams=self.ngrams,
+            contexts=contexts,
+            nonces=self.nonces,
+        )
+
     @classmethod
     def disabled(
         cls,

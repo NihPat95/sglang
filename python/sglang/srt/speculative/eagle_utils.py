@@ -663,6 +663,81 @@ def _verify_coins(
     return coins, coins_for_final_sampling
 
 
+def _append_ragged_tokens(
+    contexts: torch.Tensor,
+    tokens: torch.Tensor,
+    lengths: torch.Tensor,
+) -> torch.Tensor:
+    width = contexts.shape[1]
+    history = torch.cat((contexts, tokens.long()), dim=1)
+    offsets = torch.arange(width, device=contexts.device).view(1, -1)
+    offsets = offsets + lengths.long().view(-1, 1)
+    return torch.gather(history, dim=1, index=offsets)
+
+
+def _apply_verifier_only_watermark(
+    verify_input: EagleVerifyInput,
+    batch: ScheduleBatch,
+    next_token_logits: torch.Tensor,
+    predict: torch.Tensor,
+    num_correct_drafts: torch.Tensor,
+    accept_index: torch.Tensor,
+) -> torch.Tensor:
+    watermark = batch.sampling_info.watermark
+    if watermark is None:
+        return predict
+
+    from sglang.srt.layers.sampler import sample_textseal_from_probs
+
+    enabled_indices = torch.nonzero(watermark.enabled, as_tuple=True)[0]
+    enabled_num_correct_drafts = num_correct_drafts[enabled_indices].long()
+    bonus_columns = enabled_num_correct_drafts
+    bonus_indices = accept_index[enabled_indices, bonus_columns].long()
+
+    safe_accept_index = accept_index.long().clamp_min(0)
+    accept_tokens = predict[safe_accept_index]
+    context_tokens = accept_tokens
+    context_lengths = num_correct_drafts.long()
+    if batch.enable_overlap:
+        root_tokens = verify_input.draft_token.view(
+            len(batch.seq_lens), verify_input.draft_token_num
+        )[:, :1]
+        context_tokens = torch.cat((root_tokens, context_tokens), dim=1)
+        context_lengths = context_lengths + 1
+
+    bonus_contexts = _append_ragged_tokens(
+        watermark.contexts,
+        context_tokens,
+        context_lengths,
+    )
+    enabled_watermark = watermark.filter(enabled_indices).with_contexts(
+        bonus_contexts[enabled_indices]
+    )
+
+    bonus_probs = torch.softmax(
+        next_token_logits[bonus_indices]
+        / batch.sampling_info.temperatures[enabled_indices],
+        dim=-1,
+    )
+    bonus_tokens = sample_textseal_from_probs(
+        bonus_probs,
+        batch.sampling_info.top_ks[enabled_indices],
+        batch.sampling_info.top_ps[enabled_indices],
+        batch.sampling_info.min_ps[enabled_indices],
+        enabled_watermark,
+        verify_input.positions[bonus_indices],
+        batch.sampling_info.watermark_max_top_k,
+    )
+
+    if batch.enable_overlap:
+        # The forward-only sampling-info copy shares this tensor with the
+        # scheduled batch that consumes the next speculative result.
+        watermark.contexts.index_copy_(
+            0, enabled_indices, bonus_contexts[enabled_indices]
+        )
+    return predict.index_copy(0, bonus_indices, bonus_tokens)
+
+
 def eagle_sample(
     verify_input: EagleVerifyInput,
     batch: ScheduleBatch,
@@ -909,6 +984,15 @@ def eagle_sample(
             bs=bs,
             spec_steps=verify_input.max_tree_depth - 1,
         )
+
+    predict = _apply_verifier_only_watermark(
+        verify_input,
+        batch,
+        next_token_logits,
+        predict,
+        num_correct_drafts,
+        accept_index,
+    )
 
     # `num_correct_drafts` stays drafts-only inside this function; the returned
     # tensor includes the trailing/bonus token via out-of-place +1 so the

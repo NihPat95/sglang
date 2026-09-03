@@ -870,8 +870,8 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
             unsupported_reason = "watermark does not support disaggregated execution"
         elif get_parallel().tp_size != 1:
             unsupported_reason = "watermark currently requires tensor parallel size 1"
-        elif get_spec().speculative_algorithm:
-            unsupported_reason = "watermark does not support speculative decoding"
+        elif get_spec().speculative_algorithm not in (None, "EAGLE"):
+            unsupported_reason = "watermark speculative decoding support requires EAGLE"
         elif get_exec().dllm.dllm_algorithm is not None:
             unsupported_reason = "watermark does not support diffusion language models"
         elif sampling_params.get("beam_width", 1) > 1:

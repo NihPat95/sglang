@@ -11,6 +11,7 @@ from pathlib import Path
 from transformers import AutoTokenizer
 
 PINNED_TEXTSEAL_COMMIT = "c60d0d1da2e59f09a698438e218a07ee779b4616"
+NOMINAL_THRESHOLD = 0.01
 
 
 def _load_module(name: str, path: Path):
@@ -55,6 +56,17 @@ def _load_texts(path: Path, watermarked: bool):
     return texts
 
 
+def _rate_below_threshold(results, threshold: float) -> float:
+    return statistics.mean(item["p_value"] < threshold for item in results)
+
+
+def _threshold_for_empirical_fpr(results, target_fpr: float) -> float:
+    p_values = sorted(item["p_value"] for item in results)
+    max_false_positives = int(target_fpr * len(p_values))
+    threshold_index = min(max_false_positives, len(p_values) - 1)
+    return p_values[threshold_index]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=Path, required=True)
@@ -62,6 +74,7 @@ def main():
     parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--textseal-checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--target-fpr", type=float, default=0.01)
     args = parser.parse_args()
 
     commit = subprocess.run(
@@ -95,15 +108,26 @@ def main():
 
     positive = detector.detect_batch(_load_texts(args.samples, True))
     negative = detector.detect_batch(_load_texts(args.samples, False))
+    empirical_threshold = _threshold_for_empirical_fpr(negative, args.target_fpr)
     report = {
         "textseal_commit": commit,
         "model": args.model,
         "scoring_method": "v2",
-        "threshold": 0.01,
+        "nominal_threshold": NOMINAL_THRESHOLD,
         "positive_samples": len(positive),
         "negative_samples": len(negative),
-        "detection_rate": statistics.mean(item["detected"] for item in positive),
-        "false_positive_rate": statistics.mean(item["detected"] for item in negative),
+        "nominal_detection_rate": _rate_below_threshold(positive, NOMINAL_THRESHOLD),
+        "nominal_false_positive_rate": _rate_below_threshold(
+            negative, NOMINAL_THRESHOLD
+        ),
+        "target_false_positive_rate": args.target_fpr,
+        "empirical_threshold": empirical_threshold,
+        "empirical_detection_rate": _rate_below_threshold(
+            positive, empirical_threshold
+        ),
+        "empirical_false_positive_rate": _rate_below_threshold(
+            negative, empirical_threshold
+        ),
         "positive_median_p_value": statistics.median(
             item["p_value"] for item in positive
         ),
