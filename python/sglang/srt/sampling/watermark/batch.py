@@ -147,7 +147,9 @@ def build_watermark_batch_info(
     device: torch.device | str,
 ) -> WatermarkBatchInfo | None:
     if not any(
-        isinstance(request.watermark, WatermarkRequestConfig) for request in requests
+        isinstance(request.watermark, WatermarkRequestConfig)
+        and request.watermark.provider == "textseal"
+        for request in requests
     ):
         return None
 
@@ -155,6 +157,7 @@ def build_watermark_batch_info(
         (
             registry.resolve_request(request.watermark)
             if isinstance(request.watermark, WatermarkRequestConfig)
+            and request.watermark.provider == "textseal"
             else None
         )
         for request in requests

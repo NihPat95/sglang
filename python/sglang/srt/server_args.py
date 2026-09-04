@@ -3577,6 +3577,21 @@ class ServerArgs:
         "Enable users to pass custom logit processors to the server (disabled by default for security)",
         NS("exec.features"),
     ] = False
+    enable_watermark: A[
+        bool,
+        "Enable Aaronson-Gumbel text watermarking.",
+        NS("exec.features"),
+    ] = False
+    watermark_key: A[
+        Optional[str],
+        "Default hex-encoded 64-bit Aaronson-Gumbel watermark key.",
+        NS("exec.features"),
+    ] = None
+    watermark_context_window: A[
+        int,
+        "Default and maximum Aaronson-Gumbel watermark context window.",
+        NS("exec.features"),
+    ] = 4
     enable_return_hidden_states: A[
         bool,
         "Enable returning full hidden states with responses. Equivalent to "
@@ -3710,7 +3725,7 @@ class ServerArgs:
         # the handlers ran, not how far they got.
         self._resolution_finished = True
 
-    def resolved_dict(self) -> Dict[str, Any]:
+    def resolved_dict(self, *, redact_sensitive: bool = False) -> Dict[str, Any]:
         """This configuration as a plain dict of resolved field values.
 
         What the whole-object readbacks report (`/server_info` and its gRPC and
@@ -3721,7 +3736,10 @@ class ServerArgs:
         `model_config` memo are not fields and do not appear.
         """
 
-        return resolution_projection(self)
+        resolved = resolution_projection(self)
+        if redact_sensitive and resolved.get("watermark_key") is not None:
+            resolved["watermark_key"] = "<redacted>"
+        return resolved
 
     def replace_resolved(self, source: str, **changes: Any) -> ServerArgs:
         """A copy of this record that stays resolved, and says what it changed.

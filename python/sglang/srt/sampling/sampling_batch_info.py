@@ -21,6 +21,7 @@ from sglang.srt.sampling.watermark import (
     WatermarkRequestConfig,
     build_watermark_batch_info,
 )
+from sglang.srt.sampling.watermark.aaronson import build_aaronson_batch_config
 from sglang.srt.utils.common import is_pin_memory_available
 
 if TYPE_CHECKING:
@@ -91,6 +92,9 @@ class SamplingBatchInfo:
     logit_bias: Optional[torch.Tensor] = None
 
     watermark: Optional[WatermarkBatchInfo] = None
+    aaronson_keys: Optional[torch.Tensor] = None
+    aaronson_context_windows: Optional[torch.Tensor] = None
+    aaronson_enabled: Optional[torch.Tensor] = None
 
     @classmethod
     def from_schedule_batch(cls, batch: ScheduleBatch, vocab_size: int):
@@ -163,9 +167,26 @@ class SamplingBatchInfo:
                 r.sampling_params.top_k
                 for r in reqs
                 if isinstance(r.watermark, WatermarkRequestConfig)
+                and r.watermark.provider == "textseal"
             ),
             default=0,
         )
+        features = get_exec().features
+        if features.enable_watermark:
+            (
+                aaronson_keys,
+                aaronson_context_windows,
+                aaronson_enabled,
+            ) = build_aaronson_batch_config(
+                reqs,
+                default_key=features.watermark_key,
+                default_context_window=features.watermark_context_window,
+                device=device,
+            )
+        else:
+            aaronson_keys = None
+            aaronson_context_windows = None
+            aaronson_enabled = None
 
         if has_custom_logit_processor:
             # Merge the same type of custom logit processors together
@@ -233,6 +254,9 @@ class SamplingBatchInfo:
             return_sampling_masks=return_sampling_masks,
             sampling_mask_max_top_k=sampling_mask_max_top_k,
             watermark_max_top_k=watermark_max_top_k,
+            aaronson_keys=aaronson_keys,
+            aaronson_context_windows=aaronson_context_windows,
+            aaronson_enabled=aaronson_enabled,
         )
         ret.adjusted_from_schedule_batch(batch, vocab_size)
         return ret
@@ -389,6 +413,9 @@ class SamplingBatchInfo:
             "top_ks",
             "min_ps",
             "sampling_seed",
+            "aaronson_keys",
+            "aaronson_context_windows",
+            "aaronson_enabled",
         ]:
             value = getattr(self, item, None)
             if value is not None:
@@ -514,6 +541,9 @@ class SamplingBatchInfo:
             "top_ks",
             "min_ps",
             "sampling_seed",
+            "aaronson_keys",
+            "aaronson_context_windows",
+            "aaronson_enabled",
         ]:
             self_val = getattr(self, item, None)
             other_val = getattr(other, item, None)

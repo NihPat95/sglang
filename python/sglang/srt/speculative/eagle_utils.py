@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
     from sglang.srt.model_executor.model_runner import ModelRunner
     from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
+    from sglang.srt.sampling.watermark.aaronson import AaronsonWatermarkState
     from sglang.srt.speculative.eagle_info import EagleVerifyInput
 
 _is_cuda = is_cuda()
@@ -748,9 +749,7 @@ def _sync_watermarked_predict_across_tp(
     from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 
     tp_group = (
-        get_parallel().attn_tp_group
-        if is_dp_attention_enabled()
-        else get_tp_group()
+        get_parallel().attn_tp_group if is_dp_attention_enabled() else get_tp_group()
     )
     if tp_group.world_size > 1:
         tp_group.broadcast(predict, src=0)
@@ -762,6 +761,9 @@ def eagle_sample(
     batch: ScheduleBatch,
     logits_output: LogitsProcessorOutput,
     grammar_mask: Optional[GrammarMask] = None,
+    *,
+    aaronson_state: Optional[AaronsonWatermarkState] = None,
+    aaronson_full_mask: bool = True,
 ):
     """
     Verify and find accepted tokens based on logits output and batch
@@ -823,6 +825,28 @@ def eagle_sample(
     # Apply grammar mask if provided
     if grammar_mask is not None:
         grammar_mask.apply(next_token_logits)
+
+    aaronson_context_hashes = None
+    aaronson_selected = None
+    if aaronson_state is not None:
+        next_token_logits = next_token_logits.clone()
+        contexts, context_lengths = aaronson_state.speculative_contexts(
+            req_pool_indices=batch.req_pool_indices,
+            draft_tokens=verify_input.draft_token,
+            custom_mask=verify_input.custom_mask,
+            positions=verify_input.positions,
+            draft_token_num=verify_input.draft_token_num,
+            full_mask=aaronson_full_mask,
+            context_windows=aaronson_state.context_windows(sampling_info),
+        )
+        aaronson_context_hashes, aaronson_selected = aaronson_state.force_speculative(
+            logits=next_token_logits,
+            req_pool_indices=batch.req_pool_indices,
+            contexts=contexts,
+            context_lengths=context_lengths,
+            sampling_info=sampling_info,
+            draft_token_num=verify_input.draft_token_num,
+        )
 
     candidates = verify_input.draft_token.reshape(bs, verify_input.draft_token_num)
     predict_shape = list(next_token_logits.shape)[:-1]
@@ -1004,6 +1028,16 @@ def eagle_sample(
             spec_steps=verify_input.max_tree_depth - 1,
         )
 
+    accept_lens = num_correct_drafts + 1
+    if aaronson_state is not None:
+        aaronson_state.record_speculative(
+            req_pool_indices=batch.req_pool_indices,
+            context_hashes=aaronson_context_hashes,
+            selected=aaronson_selected,
+            accept_index=accept_index,
+            accept_lens=accept_lens,
+        )
+
     predict = _apply_verifier_only_watermark(
         verify_input,
         batch,
@@ -1017,7 +1051,7 @@ def eagle_sample(
     # `num_correct_drafts` stays drafts-only inside this function; the returned
     # tensor includes the trailing/bonus token via out-of-place +1 so the
     # name no longer flips semantics mid-function (naming doc C2).
-    return predict, num_correct_drafts + 1, accept_index
+    return predict, accept_lens, accept_index
 
 
 def eagle_prepare_for_decode(batch: ScheduleBatch):

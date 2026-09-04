@@ -144,8 +144,11 @@ from sglang.srt.runtime_context import (
 )
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.sampling.watermark import (
+    WatermarkRequestConfig,
     WatermarkRequestError,
     load_watermark_config,
+    normalize_watermark_request,
+    parse_watermark_key,
 )
 from sglang.srt.server_args import (
     PortArgs,
@@ -851,11 +854,33 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
             [obj] if obj.is_single else [obj[index] for index in range(obj.batch_size)]
         )
         for request in requests:
-            request_config = request.watermark
+            request_config = normalize_watermark_request(request.watermark)
+            request.watermark = request_config
             if request_config is None:
                 continue
-            self.watermark_registry.resolve_request(request_config)
-            self._validate_watermark_mode(request)
+            if request_config.provider == "textseal":
+                self.watermark_registry.resolve_request(request_config)
+                self._validate_watermark_mode(request)
+            elif request_config.provider == "aaronson":
+                self._validate_aaronson_request()
+                self._validate_watermark_mode(request)
+            else:
+                raise WatermarkRequestError(
+                    "watermark_provider_unknown", "unknown watermark provider"
+                )
+
+    def _validate_aaronson_request(self) -> None:
+        features = get_exec().features
+        if not features.enable_watermark:
+            raise WatermarkRequestError(
+                "watermark_disabled",
+                "request watermarking requires --enable-watermark",
+            )
+        if features.watermark_key is None:
+            raise WatermarkRequestError(
+                "watermark_disabled",
+                "Aaronson watermarking requires a server watermark key",
+            )
 
     def _validate_watermark_mode(self, request: GenerateReqInput) -> None:
         sampling_params = request.sampling_params
@@ -2109,7 +2134,9 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
         part that cannot be reconstructed afterwards.
         """
         try:
-            return self.resolved_config_dict(self.server_args.resolved_dict())
+            return self.resolved_config_dict(
+                self.server_args.resolved_dict(redact_sensitive=True)
+            )
         except Exception as e:
             logger.error(f"Failed to snapshot the resolved config for the dump: {e!r}")
             return None

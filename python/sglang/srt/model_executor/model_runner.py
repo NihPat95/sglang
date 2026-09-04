@@ -189,6 +189,7 @@ from sglang.srt.runtime_context import (
 )
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.sampling.sampling_observer import SamplingObserver
+from sglang.srt.sampling.watermark.aaronson import AaronsonWatermarkState
 from sglang.srt.server_args import (  # noqa: F401  (re-export)
     CHUNKED_PREFIX_CACHE_SUPPORTED_ATTENTION_BACKENDS,
     ServerArgs,
@@ -602,6 +603,17 @@ class ModelRunner:
             device=self.device,
         )
 
+    def init_aaronson_watermark_state(self):
+        features = get_exec().features
+        self.aaronson_watermark_state = AaronsonWatermarkState.create(
+            enabled=features.enable_watermark and not self.is_draft_worker,
+            max_num_reqs=self.req_to_token_pool.req_to_token.shape[0],
+            context_window=features.watermark_context_window,
+            max_contexts_per_req=self.req_to_token_pool.req_to_token.shape[1],
+            default_key=features.watermark_key,
+            device=self.device,
+        )
+
     def init_kv_cache_configurator(self):
         self.kv_cache_configurator = KVCacheConfigurator(
             device=self.device,
@@ -917,6 +929,7 @@ class ModelRunner:
 
         # Init ngram embedding token table
         self.init_ngram_embedding_manager()
+        self.init_aaronson_watermark_state()
 
         self.maybe_init_hisparse_coordinator()
 
@@ -1882,6 +1895,24 @@ class ModelRunner:
                 logits_output, forward_batch.sampling_info
             )
 
+        if self.aaronson_watermark_state is not None:
+            num_rows = logits_output.next_token_logits.shape[0]
+            req_pool_indices = forward_batch.req_pool_indices[:num_rows]
+            prompt_tails = (
+                forward_batch.aaronson_prompt_tails[:num_rows]
+                if forward_batch.aaronson_prompt_tails is not None
+                else None
+            )
+            self.aaronson_watermark_state.init_from_prompt(
+                req_pool_indices=req_pool_indices,
+                prompt_tails=prompt_tails,
+            )
+            self.aaronson_watermark_state.force(
+                logits=logits_output.next_token_logits,
+                req_pool_indices=req_pool_indices,
+                sampling_info=forward_batch.sampling_info,
+            )
+
         # Sample the next tokens
         next_token_ids = self.sampler(
             logits_output,
@@ -1905,6 +1936,11 @@ class ModelRunner:
             next_token_ids=next_token_ids,
             forward_batch=forward_batch,
         )
+        if self.aaronson_watermark_state is not None:
+            self.aaronson_watermark_state.append(
+                req_pool_indices=req_pool_indices,
+                token_ids=next_token_ids,
+            )
         return next_token_ids
 
     def compute_logprobs_only(

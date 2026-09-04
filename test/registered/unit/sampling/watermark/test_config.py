@@ -99,6 +99,21 @@ class TestWatermarkConfig(CustomTestCase):
                 server_args.check_server_args()
         self.assertNotIn(_SECRET_A, str(context.exception))
 
+    def test_server_args_redacts_aaronson_key_for_external_serialization(self):
+        secret = "fedcba9876543210"
+        server_args = ServerArgs(
+            model_path="dummy",
+            enable_watermark=True,
+            watermark_key=secret,
+        )
+        server_args.resolve_once()
+
+        self.assertEqual(server_args.resolved_dict()["watermark_key"], secret)
+        self.assertEqual(
+            server_args.resolved_dict(redact_sensitive=True)["watermark_key"],
+            "<redacted>",
+        )
+
     def _load(self, value):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "watermark.json"

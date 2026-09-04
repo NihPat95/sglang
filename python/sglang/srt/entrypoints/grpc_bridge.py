@@ -424,7 +424,9 @@ class RuntimeHandle:
         return json.dumps(result, default=str)
 
     def get_server_info(self) -> str:
-        result: Dict[str, Any] = self.tokenizer_manager.server_args.resolved_dict()
+        result: Dict[str, Any] = self.tokenizer_manager.server_args.resolved_dict(
+            redact_sensitive=True
+        )
         result.update(self.scheduler_info)
         result["kv_events"] = describe_kv_events_publisher(
             self.tokenizer_manager.server_args

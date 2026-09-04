@@ -229,6 +229,27 @@ def check_server_args(server_args: Any):
             "--kv-canary-sweep-interval requires --kv-canary in {log, raise}"
         )
 
+    if cfg.enable_watermark:
+        from sglang.srt.sampling.watermark import parse_watermark_key
+
+        if cfg.device != "cuda":
+            raise ValueError(
+                "--enable-watermark requires --device cuda, " f"got {cfg.device!r}"
+            )
+        if cfg.watermark_key is None:
+            raise ValueError("--enable-watermark requires --watermark-key")
+        parse_watermark_key(cfg.watermark_key)
+        if cfg.watermark_context_window < 1:
+            raise ValueError(
+                "--watermark-context-window must be at least 1, "
+                f"got {cfg.watermark_context_window!r}"
+            )
+        if cfg.enable_custom_logit_processor:
+            raise ValueError(
+                "--enable-watermark is incompatible with "
+                "--enable-custom-logit-processor"
+            )
+
     check_load_publish_args(server_args)
 
 

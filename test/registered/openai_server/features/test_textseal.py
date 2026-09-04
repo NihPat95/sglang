@@ -99,6 +99,60 @@ class TestTextSealEndpoints(CustomTestCase):
                 with self.subTest(endpoint=endpoint, stream=stream):
                     self._request(endpoint, payload, stream=stream)
 
+        self._request(
+            "/v1/completions",
+            {"model": MODEL, "prompt": "The ordinary completion path"},
+            stream=False,
+            header=False,
+        )
+
+    def test_completion_detector_headers(self):
+        """Detector headers must score the prompt instead of generating text."""
+        payload = {
+            "model": MODEL,
+            "prompt": "Watermark detection needs enough tokens to score this text.",
+        }
+        cases = [
+            (
+                "X-SGLang-TextSeal-Detector",
+                "detect;key_a=741852963;key_b=963852741;ngram=3;mixing_probability=0.5",
+                "textseal",
+            ),
+            (
+                "X-SGLang-Aaronson-Detector",
+                "detect;key=0123456789abcdef;context_window=4",
+                "aaronson",
+            ),
+        ]
+        for header, value, provider in cases:
+            with self.subTest(provider=provider):
+                response = requests.post(
+                    DEFAULT_URL_FOR_TEST + "/v1/completions",
+                    json=payload,
+                    headers={header: value},
+                    timeout=60,
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                body = response.json()
+                self.assertEqual(body["object"], "watermark_detection")
+                self.assertEqual(body["provider"], provider)
+                self.assertGreater(body["n_tokens"], 0)
+                self.assertNotIn("choices", body)
+
+        secret = "do-not-log"
+        response = requests.post(
+            DEFAULT_URL_FOR_TEST + "/v1/completions",
+            json=payload,
+            headers={
+                "X-SGLang-TextSeal-Detector": (
+                    f"detect;key_a={secret};key_b=2;ngram=3;mixing_probability=0.5"
+                )
+            },
+            timeout=60,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn(secret, response.text)
+
     def test_stable_header_errors(self):
         payload = {
             "model": MODEL,

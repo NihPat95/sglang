@@ -830,7 +830,7 @@ async def server_info():
 
     return msgspec_to_builtins(
         {
-            **server_args.resolved_dict(),
+            **server_args.resolved_dict(redact_sensitive=True),
             **_global_state.scheduler_info,
             "startup_time": _global_state.tokenizer_manager.startup_time,
             "internal_states": internal_states,

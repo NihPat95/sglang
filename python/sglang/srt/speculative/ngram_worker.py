@@ -306,9 +306,9 @@ class NGRAMWorker(BaseSpecWorker):
         total_draft_token_num = len(req_drafts)
 
         # Check if speculative decoding is needed; here we always enforce it
-        assert (
-            total_draft_token_num == bs * self.draft_token_num
-        ), f"{total_draft_token_num=}, {bs=}, {self.draft_token_num=}"
+        assert total_draft_token_num == bs * self.draft_token_num, (
+            f"{total_draft_token_num=}, {bs=}, {self.draft_token_num=}"
+        )
         return req_drafts, mask
 
     def _prepare_for_speculative_decoding(self, batch: ScheduleBatch):
@@ -483,7 +483,13 @@ class NGRAMWorker(BaseSpecWorker):
                 predict,
                 accept_lens,
                 accept_index,
-            ) = eagle_sample(verify_input, batch, logits_output, grammar_mask)
+            ) = eagle_sample(
+                verify_input,
+                batch,
+                logits_output,
+                grammar_mask,
+                aaronson_state=self.model_runner.aaronson_watermark_state,
+            )
             new_seq_lens = batch.seq_lens + accept_lens
             commit_mamba_states_after_verify(
                 self.target_worker,
@@ -492,8 +498,14 @@ class NGRAMWorker(BaseSpecWorker):
                 accept_index,
                 self.draft_token_num,
             )
-            accept_tokens = predict[accept_index].flatten()
-            next_token_ids = accept_tokens
+            accept_tokens = predict[accept_index]
+            if self.model_runner.aaronson_watermark_state is not None:
+                self.model_runner.aaronson_watermark_state.append_speculative(
+                    req_pool_indices=batch.req_pool_indices,
+                    accept_tokens=accept_tokens,
+                    accept_lens=accept_lens,
+                )
+            next_token_ids = accept_tokens.flatten()
 
             # The KV mover expects drafts-only counts. NGRAM's
             # accept_lens includes the bonus token, matching scheduler output.

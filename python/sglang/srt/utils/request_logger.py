@@ -256,10 +256,16 @@ def _dataclass_to_string_truncated(
         else:
             return str(data)
     elif isinstance(data, dict):
+        redact_watermark_key = data.get("provider") == "aaronson"
         return (
             "{"
             + ", ".join(
-                f"'{k}': {_dataclass_to_string_truncated(v, max_length)}"
+                f"'{k}': "
+                + (
+                    repr("<redacted>")
+                    if redact_watermark_key and k == "key"
+                    else _dataclass_to_string_truncated(v, max_length)
+                )
                 for k, v in data.items()
                 if k not in skip_names
             )
@@ -296,8 +302,13 @@ def _transform_data_for_logging(
             return list(data[:half_length]) + ["..."] + list(data[-half_length:])
         return [_transform_data_for_logging(v, max_length) for v in data]
     elif isinstance(data, dict):
+        redact_watermark_key = data.get("provider") == "aaronson"
         return {
-            k: _transform_data_for_logging(v, max_length)
+            k: (
+                "<redacted>"
+                if redact_watermark_key and k == "key"
+                else _transform_data_for_logging(v, max_length)
+            )
             for k, v in data.items()
             if k not in skip_names
         }
